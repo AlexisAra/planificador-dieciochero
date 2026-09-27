@@ -259,8 +259,8 @@ int scheduler_run(dag_t *g, int K)
     for (;;) {
 
         /*
-         * Mientras haya espacio segun K y nodos READY,
-         * lanzamos nuevos procesos.
+         * Lanzamos nodos mientras haya nodos READY
+         * y queden cupos segun K.
          */
         while (running < max_active) {
             int node_index;
@@ -275,8 +275,8 @@ int scheduler_run(dag_t *g, int K)
                     int status;
                     int idx = active[j].node_index;
 
-                    close(active[j].read_fd);
                     waitpid(g->nodes[idx].pid, &status, 0);
+                    close(active[j].read_fd);
                 }
 
                 free(pfds);
@@ -289,15 +289,15 @@ int scheduler_run(dag_t *g, int K)
         }
 
         /*
-         * Si no hay ningun hijo ejecutandose,
-         * tampoco quedan nodos READY.
+         * Si no queda ningun proceso corriendo,
+         * el scheduler termino.
          */
         if (running == 0) {
             break;
         }
 
         /*
-         * Preparamos los pipes que poll debe vigilar.
+         * Preparamos los pipes activos para poll().
          */
         for (int i = 0; i < running; i++) {
             pfds[i].fd = active[i].read_fd;
@@ -312,6 +312,7 @@ int scheduler_run(dag_t *g, int K)
         int poll_result = poll(pfds, (nfds_t)running, -1);
 
         if (poll_result < 0) {
+
             if (errno == EINTR) {
                 continue;
             }
@@ -322,8 +323,8 @@ int scheduler_run(dag_t *g, int K)
                 int status;
                 int idx = active[i].node_index;
 
-                close(active[i].read_fd);
                 waitpid(g->nodes[idx].pid, &status, 0);
+                close(active[i].read_fd);
             }
 
             free(pfds);
@@ -333,7 +334,7 @@ int scheduler_run(dag_t *g, int K)
         }
 
         /*
-         * Revisamos cual hijo produjo el evento.
+         * Buscamos cual hijo genero el evento.
          */
         for (int i = 0; i < running; i++) {
 
@@ -359,6 +360,7 @@ int scheduler_run(dag_t *g, int K)
             node_t *nd = &g->nodes[node_index];
 
             if (waitpid(nd->pid, &status, 0) < 0) {
+
                 perror("waitpid");
                 nd->state = ST_FAILED;
 
@@ -376,20 +378,23 @@ int scheduler_run(dag_t *g, int K)
                             "scheduler: error propagando resultado\n");
 
                     close(active[i].read_fd);
+
                     free(pfds);
                     free(active);
                     ready_queue_free(&ready);
+
                     return -1;
                 }
 
             } else {
+
                 nd->state = ST_FAILED;
             }
 
             close(active[i].read_fd);
 
             /*
-             * Eliminamos este proceso de la lista activa.
+             * Quitamos el hijo terminado de active[].
              */
             for (int j = i; j < running - 1; j++) {
                 active[j] = active[j + 1];
@@ -399,7 +404,7 @@ int scheduler_run(dag_t *g, int K)
 
             /*
              * Volvemos arriba para aprovechar inmediatamente
-             * el cupo de concurrencia que se libero.
+             * el cupo de concurrencia liberado.
              */
             break;
         }
