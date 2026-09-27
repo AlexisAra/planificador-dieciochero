@@ -1,8 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include "dag.h"
 #include <unistd.h>
 #include <sys/wait.h>
+#include <poll.h>
+#include <errno.h>
+#include <string.h>
+#include "dag.h"
+
 /*
  * Cola de nodos listos*/
 typedef struct {
@@ -138,12 +142,58 @@ static int launch_node(dag_t *g, int node_index, active_child_t *active)
 }
 
 
-/*
- *se ejecuta el planificador.
- *
- * buscar los nodos que no tienen dependencias pendientes
- * y agregar a la cola READY.
- */
+
+static int propagate_success(dag_t *g, int node_index,
+                             ready_queue_t *ready,
+                             const char *message)
+{
+    node_t *nd = &g->nodes[node_index];
+
+    for (int i = 0; i < nd->nchildren; i++) {
+        int child_index = nd->children[i];
+        node_t *child = &g->nodes[child_index];
+
+        /*
+         * se guarda el mensaje recibido.
+         */
+        if (message[0] != '\0') {
+            size_t used = strlen(child->inbox);
+            size_t capacity = sizeof(child->inbox);
+
+            if (used < capacity - 1) {
+                snprintf(child->inbox + used,
+                         capacity - used,
+                         "%s%s",
+                         used > 0 ? "\n" : "",
+                         message);
+            }
+        }
+
+        if (child->pending > 0) {
+            child->pending--;
+        }
+
+        /*
+         * Si ya no falta ninguna dependencia,
+         * el nodo puede ejecutarse.
+         */
+        if (child->pending == 0 &&
+            child->state == ST_PENDING) {
+
+            child->state = ST_READY;
+
+            if (ready_queue_push(ready, child_index) < 0) {
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+
+
+
 int scheduler_run(dag_t *g, int K)
 {
     if (g == NULL || K <= 0) {
@@ -187,21 +237,141 @@ int scheduler_run(dag_t *g, int K)
     active_child_t *active =
         malloc((size_t)max_active * sizeof(active_child_t));
 
+
+struct pollfd *pfds =
+    malloc((size_t)max_active * sizeof(struct pollfd));
+
+if (pfds == NULL) {
+    fprintf(stderr, "scheduler: sin memoria para poll\n");
+    free(active);
+    ready_queue_free(&ready);
+    return -1;
+}
+
+
+
     if (active == NULL) {
         fprintf(stderr, "scheduler: sin memoria para hijos activos\n");
         ready_queue_free(&ready);
         return -1;
     }
 
-    for (;;) {
-        int running = 0;
+int running = 0;
+
+for (;;) {
 
         /*
-         * Lanzamos nodos mientras haya nodos READY
+         * se lanzan  nodos mientras haya nodos READY
          * y no superemos el limite K.
          */
         while (running < max_active) {
             int node_index;
+
+        /*
+         * Si no hay procesos corriendo y tampoco quedan
+         * nodos READY, no queda trabajo por hacer.
+         */
+        if (running == 0 && ready.head >= ready.tail) {
+            break;
+        }
+
+        for (int i = 0; i < running; i++) {
+            pfds[i].fd = active[i].read_fd;
+            pfds[i].events = POLLIN;
+            pfds[i].revents = 0;
+        }
+
+        /*
+         * -1 significa esperar indefinidamente.
+         * El proceso padre duerme hasta que ocurra un evento.
+         */
+        int poll_result = poll(pfds, (nfds_t)running, -1);
+
+        if (poll_result < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            perror("poll");
+
+            for (int i = 0; i < running; i++) {
+                int status;
+                int idx = active[i].node_index;
+
+                close(active[i].read_fd);
+                waitpid(g->nodes[idx].pid, &status, 0);
+            }
+
+            free(pfds);
+            free(active);
+            ready_queue_free(&ready);
+            return -1;
+        }
+
+        for (int i = 0; i < running; i++) {
+
+            if (!(pfds[i].revents &
+                  (POLLIN | POLLHUP | POLLERR | POLLNVAL))) {
+                continue;
+            }
+
+            char message[MAX_MSG];
+            ssize_t n = read(active[i].read_fd,
+                             message,
+                             sizeof(message) - 1);
+
+            if (n > 0) {
+                message[n] = '\0';
+            } else {
+                message[0] = '\0';
+            }
+
+            int status;
+            int node_index = active[i].node_index;
+            node_t *nd = &g->nodes[node_index];
+
+            if (waitpid(nd->pid, &status, 0) < 0) {
+                perror("waitpid");
+                nd->state = ST_FAILED;
+
+            } else if (WIFEXITED(status) &&
+                       WEXITSTATUS(status) == 0) {
+
+                nd->state = ST_DONE;
+
+                if (propagate_success(g,
+                                      node_index,
+                                      &ready,
+                                      message) < 0) {
+
+                    fprintf(stderr,
+                            "scheduler: error propagando resultado\n");
+
+                    close(active[i].read_fd);
+                    free(pfds);
+                    free(active);
+                    ready_queue_free(&ready);
+                    return -1;
+                }
+
+            } else {
+                nd->state = ST_FAILED;
+            }
+
+            close(active[i].read_fd);
+
+            for (int j = i; j < running - 1; j++) {
+                active[j] = active[j + 1];
+            }
+
+            running--;
+
+            break;
+        }
+
+
+
+
 
             if (ready_queue_pop(&ready, &node_index) < 0) {
                 break;
@@ -221,6 +391,7 @@ int scheduler_run(dag_t *g, int K)
                     close(active[j].read_fd);
                 }
 
+                free(pfds);
                 free(active);
                 ready_queue_free(&ready);
                 return -1;
@@ -237,12 +408,6 @@ int scheduler_run(dag_t *g, int K)
             break;
         }
 
-        /*
-         * Temporalmente esperamos los procesos creados.
-         *
-         * En el siguiente commit reemplazaremos esta parte
-         * por poll(), que sera el mecanismo definitivo.
-         */
         for (int i = 0; i < running; i++) {
             int status;
             int node_index = active[i].node_index;
@@ -263,7 +428,7 @@ int scheduler_run(dag_t *g, int K)
     }
 
     free(active);
-
+     free(pfds);
     ready_queue_free(&ready);
 
     return 0;
