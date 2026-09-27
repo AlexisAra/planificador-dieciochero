@@ -234,21 +234,9 @@ int scheduler_run(dag_t *g, int K)
         return 0;
     }
 
+
     active_child_t *active =
         malloc((size_t)max_active * sizeof(active_child_t));
-
-
-struct pollfd *pfds =
-    malloc((size_t)max_active * sizeof(struct pollfd));
-
-if (pfds == NULL) {
-    fprintf(stderr, "scheduler: sin memoria para poll\n");
-    free(active);
-    ready_queue_free(&ready);
-    return -1;
-}
-
-
 
     if (active == NULL) {
         fprintf(stderr, "scheduler: sin memoria para hijos activos\n");
@@ -256,25 +244,61 @@ if (pfds == NULL) {
         return -1;
     }
 
-int running = 0;
+    struct pollfd *pfds =
+        malloc((size_t)max_active * sizeof(struct pollfd));
 
-for (;;) {
+    if (pfds == NULL) {
+        fprintf(stderr, "scheduler: sin memoria para poll\n");
+        free(active);
+        ready_queue_free(&ready);
+        return -1;
+    }
+
+    int running = 0;
+
+    for (;;) {
 
         /*
-         * se lanzan  nodos mientras haya nodos READY
-         * y no superemos el limite K.
+         * Mientras haya espacio segun K y nodos READY,
+         * lanzamos nuevos procesos.
          */
         while (running < max_active) {
             int node_index;
 
+            if (ready_queue_pop(&ready, &node_index) < 0) {
+                break;
+            }
+
+            if (launch_node(g, node_index, &active[running]) < 0) {
+
+                for (int j = 0; j < running; j++) {
+                    int status;
+                    int idx = active[j].node_index;
+
+                    close(active[j].read_fd);
+                    waitpid(g->nodes[idx].pid, &status, 0);
+                }
+
+                free(pfds);
+                free(active);
+                ready_queue_free(&ready);
+                return -1;
+            }
+
+            running++;
+        }
+
         /*
-         * Si no hay procesos corriendo y tampoco quedan
-         * nodos READY, no queda trabajo por hacer.
+         * Si no hay ningun hijo ejecutandose,
+         * tampoco quedan nodos READY.
          */
-        if (running == 0 && ready.head >= ready.tail) {
+        if (running == 0) {
             break;
         }
 
+        /*
+         * Preparamos los pipes que poll debe vigilar.
+         */
         for (int i = 0; i < running; i++) {
             pfds[i].fd = active[i].read_fd;
             pfds[i].events = POLLIN;
@@ -282,8 +306,8 @@ for (;;) {
         }
 
         /*
-         * -1 significa esperar indefinidamente.
-         * El proceso padre duerme hasta que ocurra un evento.
+         * Esperamos bloqueados hasta que algun hijo
+         * escriba o cierre su pipe.
          */
         int poll_result = poll(pfds, (nfds_t)running, -1);
 
@@ -308,6 +332,9 @@ for (;;) {
             return -1;
         }
 
+        /*
+         * Revisamos cual hijo produjo el evento.
+         */
         for (int i = 0; i < running; i++) {
 
             if (!(pfds[i].revents &
@@ -316,6 +343,7 @@ for (;;) {
             }
 
             char message[MAX_MSG];
+
             ssize_t n = read(active[i].read_fd,
                              message,
                              sizeof(message) - 1);
@@ -360,77 +388,26 @@ for (;;) {
 
             close(active[i].read_fd);
 
+            /*
+             * Eliminamos este proceso de la lista activa.
+             */
             for (int j = i; j < running - 1; j++) {
                 active[j] = active[j + 1];
             }
 
             running--;
 
+            /*
+             * Volvemos arriba para aprovechar inmediatamente
+             * el cupo de concurrencia que se libero.
+             */
             break;
-        }
-
-
-
-
-
-            if (ready_queue_pop(&ready, &node_index) < 0) {
-                break;
-            }
-
-            if (launch_node(g, node_index, &active[running]) < 0) {
-
-                /*
-                 * Si no pudimos lanzar uno, esperamos los que
-                 * ya habiamos creado antes de salir.
-                 */
-                for (int j = 0; j < running; j++) {
-                    int status;
-                    int idx = active[j].node_index;
-
-                    waitpid(g->nodes[idx].pid, &status, 0);
-                    close(active[j].read_fd);
-                }
-
-                free(pfds);
-                free(active);
-                ready_queue_free(&ready);
-                return -1;
-            }
-
-            running++;
-        }
-
-        /*
-         * Si no pudimos sacar ningun nodo de READY,
-         * terminamos esta etapa.
-         */
-        if (running == 0) {
-            break;
-        }
-
-        for (int i = 0; i < running; i++) {
-            int status;
-            int node_index = active[i].node_index;
-            node_t *nd = &g->nodes[node_index];
-
-            if (waitpid(nd->pid, &status, 0) < 0) {
-                perror("waitpid");
-                nd->state = ST_FAILED;
-            } else if (WIFEXITED(status) &&
-                       WEXITSTATUS(status) == 0) {
-                nd->state = ST_DONE;
-            } else {
-                nd->state = ST_FAILED;
-            }
-
-            close(active[i].read_fd);
         }
     }
 
+    free(pfds);
     free(active);
-     free(pfds);
     ready_queue_free(&ready);
 
     return 0;
 }
-	
