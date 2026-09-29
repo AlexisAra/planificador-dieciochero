@@ -91,9 +91,7 @@ Con Ctrl+C, el planificador manda una señal a todos los procesos activos para q
 
 - Ejemplo del enunciado (tests/plan1.txt), con distintos valores de K.
 - Fallo de una actividad y verificación de que solo se aborta su rama, no el programa completo.
-- Ctrl+C a mitad de la ejecución, sin dejar procesos huérfanos ni zombies.
 - Carga de estrés con 10000 actividades (tests/plan_grande.txt, generado con tests/gen_plan.py).
-- Revisión de memoria con valgrind --leak-check=full, sin fugas de memoria en el proceso principal.
 
 ## Limitaciones conocidas
 
