@@ -83,7 +83,7 @@ Con Ctrl+C, el planificador manda una señal a todos los procesos activos para q
 ## Decisiones de diseño
 
 - Tabla hash para los IDs: elegimos esto porque el enunciado pide soportar hasta 10000 actividades, y buscar cada dependencia comparando una por una habría sido muy lento.
-- poll() en vez de busy-waiting: el enunciado prohíbe el uso de hilos y busy-waiting. poll() bloquea el programa sin gastar CPU hasta que realmente hay algo que hacer.
+- poll() en vez de busy-waiting: poll() bloquea el programa sin gastar CPU hasta que realmente hay algo que hacer.
 - Self-pipe para las señales: usamos esto en vez de hacer todo directamente dentro del manejador de señales, porque dentro de un manejador no se pueden usar funciones como printf o malloc de forma segura.
 - BFS para abortar ramas: usamos una cola en vez de una función recursiva, para evitar problemas si el grafo es muy grande (con recursión se podría llegar a desbordar la pila).
 
