@@ -11,7 +11,7 @@
 #include "dag.h"
 
 
-/* Cola de nodos listos para ejecutarse */
+/* se ejecuta la cola de los nodos */
 typedef struct {
     int *items;
     int head;
@@ -21,7 +21,7 @@ typedef struct {
 
 
 /*
- * Informacion que el padre guarda de cada hijo activo.
+ * datos  que guarda el padre de cada hijo
  */
 typedef struct {
     int node_index;
@@ -36,7 +36,7 @@ typedef struct {
 
 
 /*
- * Pipe especial usado para despertar poll()
+ * pipe usado para despertar poll()
  * cuando llega SIGINT o SIGCHLD.
  */
 static int sigpipe[2] = {-1, -1};
@@ -44,9 +44,7 @@ static int sigpipe[2] = {-1, -1};
 static volatile sig_atomic_t got_sigint = 0;
 
 
-/* --------------------------------------------------------- */
-/* COLA READY                                                */
-/* --------------------------------------------------------- */
+/* COLA LISTA                                                */
 
 static int ready_init(ready_queue_t *q, int capacity)
 {
@@ -96,16 +94,8 @@ static void ready_free(ready_queue_t *q)
     q->items = NULL;
 }
 
-
-/* --------------------------------------------------------- */
-/* SEÑALES                                                   */
-/* --------------------------------------------------------- */
-
 /*
- * El handler debe hacer lo minimo posible.
- *
- * No hacemos waitpid(), malloc(), printf(), etc. aqui.
- * Solo marcamos SIGINT y escribimos un byte al self-pipe.
+ * aca solo marcamos SIGINT y escribimos un byte al self-pipe.
  */
 static void signal_handler(int sig)
 {
@@ -129,9 +119,9 @@ static void signal_handler(int sig)
 
 
 /*
- * Dejamos el descriptor no bloqueante.
+ * se deja  el descriptor no bloqueante.
  *
- * Esto es importante porque el signal handler nunca
+ * esto es importante porque el signal handler nunca
  * debe quedar bloqueado intentando escribir al pipe.
  */
 static int make_nonblocking(int fd)
@@ -153,7 +143,7 @@ static int make_nonblocking(int fd)
 
 
 /*
- * Crea el self-pipe e instala handlers para
+ * se crea el self-pipe y se instalan  handlers para
  * SIGINT y SIGCHLD.
  */
 static int setup_signals(struct sigaction *old_int,
@@ -225,7 +215,7 @@ static int setup_signals(struct sigaction *old_int,
 
 
 /*
- * Restaura los handlers originales y cierra
+ * restaura  los handlers originales y cierra
  * los descriptores utilizados para señales.
  */
 static void restore_signals(const struct sigaction *old_int,
@@ -251,7 +241,7 @@ static void restore_signals(const struct sigaction *old_int,
 
 
 /*
- * Vacia el self-pipe.
+ * se vacia  el self-pipe.
  */
 static void drain_sigpipe(void)
 {
@@ -279,11 +269,10 @@ static void drain_sigpipe(void)
 
 
 /*
- * Los hijos heredan los handlers del padre despues
+ * los hijos heredan los handlers del padre despues
  * del fork().
- *
- * Los devolvemos a su comportamiento normal.
  */
+
 static void reset_signals_in_child(void)
 {
     struct sigaction sa;
@@ -310,9 +299,6 @@ static void reset_signals_in_child(void)
 }
 
 
-/* --------------------------------------------------------- */
-/* LANZAR ACTIVIDAD                                          */
-/* --------------------------------------------------------- */
 
 static int launch_node(dag_t *g,
                        int node_index,
@@ -345,12 +331,12 @@ static int launch_node(dag_t *g,
 
 
     /*
-     * HIJO
+     * el hijo
      */
     if (pid == 0) {
 
         /*
-         * El hijo solamente escribe.
+         * solamente escribe el hijo
          */
         close(fds[0]);
 
@@ -365,10 +351,6 @@ static int launch_node(dag_t *g,
         _exit(1);
     }
 
-
-    /*
-     * PADRE
-     */
 
     /*
      * El padre solamente lee.
@@ -398,10 +380,6 @@ static int launch_node(dag_t *g,
 }
 
 
-/* --------------------------------------------------------- */
-/* ACTIVIDAD TERMINO CORRECTAMENTE                           */
-/* --------------------------------------------------------- */
-
 static int propagate_success(dag_t *g,
                              int node_index,
                              ready_queue_t *ready,
@@ -427,7 +405,7 @@ static int propagate_success(dag_t *g,
 
 
         /*
-         * Si esta rama ya fue abortada,
+         * si esta rama ya fue abortada,
          * no hacemos nada.
          */
         if (child->state == ST_ABORTED) {
@@ -436,7 +414,7 @@ static int propagate_success(dag_t *g,
 
 
         /*
-         * Guardamos el mensaje del padre
+         * se guarda  el mensaje del padre
          * en el inbox del hijo.
          */
         if (message[0] != '\0') {
@@ -462,7 +440,7 @@ static int propagate_success(dag_t *g,
 
 
         /*
-         * Una dependencia ya termino.
+         * una  dependencia ya termino.
          */
         if (child->pending > 0) {
             child->pending--;
@@ -470,7 +448,7 @@ static int propagate_success(dag_t *g,
 
 
         /*
-         * Si ya no quedan dependencias,
+         * si ya no quedan dependencias,
          * el hijo pasa a READY.
          */
         if (child->pending == 0 &&
@@ -492,15 +470,8 @@ static int propagate_success(dag_t *g,
 }
 
 
-/* --------------------------------------------------------- */
-/* FALLA DE UNA RAMA                                         */
-/* --------------------------------------------------------- */
-
 /*
- * Aborta todos los descendientes de un nodo fallido.
- *
- * Usamos BFS en vez de recursion para evitar problemas
- * con grafos grandes.
+ * aborta todos los descendientes de un nodo fallido.
  */
 static int abort_descendants(dag_t *g,
                              int node_index)
@@ -534,7 +505,7 @@ static int abort_descendants(dag_t *g,
 
 
     /*
-     * Empezamos por los hijos directos.
+     * empezamos por los hijos directos.
      */
     for (int i = 0;
          i < root->nchildren;
@@ -554,7 +525,7 @@ static int abort_descendants(dag_t *g,
             node->state == ST_READY) {
 
             /*
-             * Marcamos antes de agregar a la cola
+             * marcamos antes de agregar a la cola
              * para evitar duplicados.
              */
             node->state = ST_ABORTED;
@@ -610,14 +581,8 @@ static int abort_descendants(dag_t *g,
 }
 
 
-/* --------------------------------------------------------- */
-/* SIGCHLD / WAITPID                                         */
-/* --------------------------------------------------------- */
-
 /*
  * Recoge todos los procesos hijos que ya terminaron.
- *
- * WNOHANG evita bloquear.
  */
 static void reap_children(dag_t *g,
                           active_child_t *active,
@@ -656,9 +621,7 @@ static void reap_children(dag_t *g,
 }
 
 
-/* --------------------------------------------------------- */
-/* LEER PIPE DE UN HIJO                                      */
-/* --------------------------------------------------------- */
+/* LEER EL  PIPE DE UN HIJO                                      */
 
 static int read_child_pipe(active_child_t *active)
 {
@@ -701,9 +664,7 @@ static int read_child_pipe(active_child_t *active)
 }
 
 
-/* --------------------------------------------------------- */
-/* FINALIZAR HIJOS                                           */
-/* --------------------------------------------------------- */
+/* FINALIZAR LOS  HIJOS                                           */
 
 static int finalize_children(dag_t *g,
                              active_child_t *active,
@@ -744,9 +705,6 @@ static int finalize_children(dag_t *g,
         node = &g->nodes[node_index];
 
 
-        /*
-         * TERMINO CORRECTAMENTE
-         */
         if (WIFEXITED(current->status) &&
             WEXITSTATUS(current->status) == 0) {
 
@@ -763,7 +721,7 @@ static int finalize_children(dag_t *g,
         }
 
         /*
-         * FALLO
+         * SI FALLA
          */
         else {
 
@@ -800,10 +758,7 @@ static int finalize_children(dag_t *g,
     return 0;
 }
 
-
-/* --------------------------------------------------------- */
-/* CTRL+C                                                    */
-/* --------------------------------------------------------- */
+/*EL CONTROL+C ASESINARA A LOS HIJOS*/
 
 static void mark_unfinished_aborted(dag_t *g)
 {
@@ -847,9 +802,7 @@ static void terminate_active(dag_t *g,
         pid =
             g->nodes[node_index].pid;
 
-
-        if (pid > 0) {
-
+	 if (pid > 0 && !active[i].exited) {
             if (kill(pid, SIGTERM) < 0 &&
                 errno != ESRCH) {
 
@@ -889,10 +842,9 @@ static void terminate_active(dag_t *g,
         int status;
 
 
-        if (pid <= 0) {
-            continue;
-        }
-
+	if (pid <= 0 || active[i].exited) {
+   	 continue;
+	}
 
         while (waitpid(pid,
                        &status,
@@ -917,9 +869,7 @@ static void terminate_active(dag_t *g,
 }
 
 
-/* --------------------------------------------------------- */
 /* SCHEDULER PRINCIPAL                                       */
-/* --------------------------------------------------------- */
 
 int scheduler_run(dag_t *g,
                   int K)
@@ -1075,7 +1025,7 @@ int scheduler_run(dag_t *g,
 
 
         /*
-         * Procesamos los que ya tienen:
+         * se procesan  los que ya tienen:
          * - estado de salida
          * - pipe leido/cerrado
          */
@@ -1100,7 +1050,7 @@ int scheduler_run(dag_t *g,
 
 
         /*
-         * Lanzamos nuevos procesos hasta llegar a K.
+         * se lanzan  nuevos procesos hasta llegar a K.
          */
         while (running < max_active) {
 
@@ -1146,7 +1096,7 @@ int scheduler_run(dag_t *g,
 
 
         /*
-         * Si no hay hijos vivos y tampoco pudimos
+         * Si no hay hijos vivos y no  pudimos
          * lanzar otro, terminamos.
          */
         if (running == 0) {
@@ -1155,7 +1105,7 @@ int scheduler_run(dag_t *g,
 
 
         /*
-         * pfds[0] vigila señales.
+         * pfds[0] vigila las  señales.
          */
         pfds[0].fd =
             sigpipe[0];
@@ -1196,7 +1146,7 @@ int scheduler_run(dag_t *g,
 
         /*
          * -1 = esperar indefinidamente.
-         *
+         * Por lo cual 
          * No hay busy-waiting.
          */
         int poll_result;
@@ -1241,8 +1191,7 @@ int scheduler_run(dag_t *g,
 
 
         /*
-         * Dejamos que el comienzo del loop
-         * maneje Ctrl+C.
+         * comienzo de loop
          */
         if (got_sigint) {
             continue;
